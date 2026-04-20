@@ -118,8 +118,9 @@
         };
         // ============================================================================
 
-        // 自動判斷環境：如果在畫布預覽用內建的，如果發布出去用你填寫的 MY_FIREBASE_CONFIG
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : MY_FIREBASE_CONFIG;
+        // 偵測環境：如果在 Canvas 預覽就用內建的，如果在 GitHub Pages 就用你的 MY_FIREBASE_CONFIG
+        const isCanvasEnv = typeof __firebase_config !== 'undefined';
+        const firebaseConfig = isCanvasEnv ? JSON.parse(__firebase_config) : MY_FIREBASE_CONFIG;
         
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -214,7 +215,6 @@
 
         // 3. 處理身分驗證 (含錯誤回報機制)
         const initAuth = async () => {
-            // 檢查是否沒有填寫 Config
             if (Object.keys(firebaseConfig).length === 0) {
                 statusText.innerText = "❌ 尚未設定 Firebase Config，請在程式碼中填寫金鑰！";
                 statusText.className = "text-sm text-red-600 font-bold";
@@ -225,12 +225,10 @@
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
-                    // 如果在 GitHub 上運行，會執行匿名登入
                     await signInAnonymously(auth);
                 }
             } catch (error) {
                 console.error("驗證失敗:", error);
-                // 顯示具體錯誤，例如 auth/operation-not-allowed 代表沒開匿名登入
                 statusText.innerText = `❌ 連線失敗 (${error.code})：請確認 Firebase 是否已開啟「匿名登入」`;
                 statusText.className = "text-sm text-red-600 font-bold";
             }
@@ -238,7 +236,9 @@
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
-                statusText.innerText = "🟢 已連線，資料即時同步中";
+                // 明確標示目前連線在哪個環境
+                const envName = isCanvasEnv ? "畫布測試區" : "正式資料庫";
+                statusText.innerText = `🟢 已連線 (${envName})，資料即時同步中`;
                 statusText.className = "text-sm text-green-600 font-medium";
                 setupRealtimeListeners();
                 setupEventListeners();
@@ -273,7 +273,11 @@
                     btn.onclick = async () => {
                         btn.classList.add('scale-95', 'opacity-80');
                         setTimeout(() => btn.classList.remove('scale-95', 'opacity-80'), 150);
-                        await setDoc(votesDocRef, { [opt]: increment(1) }, { merge: true });
+                        try {
+                            await setDoc(votesDocRef, { [opt]: increment(1) }, { merge: true });
+                        } catch (err) {
+                            console.error("投票寫入失敗", err);
+                        }
                     };
                     voteButtonsContainer.appendChild(btn);
                 });
@@ -288,7 +292,7 @@
                 editWordCloudTitle.value = config.wordCloudTitle;
             }, (error) => {
                 console.error("讀取設定檔失敗:", error);
-                statusText.innerText = `❌ 資料讀取失敗 (${error.code})：請確認 Firestore 資料庫是否已開啟並設定為「測試模式」`;
+                statusText.innerText = `❌ 設定檔同步失敗 (${error.code})`;
                 statusText.className = "text-sm text-red-600 font-bold";
             });
 
@@ -298,12 +302,16 @@
                 const newData = labels.map(label => data[label] || 0);
                 voteChart.data.datasets[0].data = newData;
                 voteChart.update();
+            }, (error) => {
+                console.error("投票資料同步錯誤:", error);
             });
 
             onSnapshot(wordsDocRef, (docSnap) => {
                 const data = docSnap.exists() ? docSnap.data() : {};
                 const list = Object.entries(data).map(([word, count]) => [word, count]);
                 renderWordCloud(list.length > 0 ? list : [['等待輸入中', 1]]);
+            }, (error) => {
+                console.error("文字雲資料同步錯誤:", error);
             });
         }
 
@@ -323,7 +331,11 @@
                 if (!word) return;
                 wordInput.value = ''; 
                 wordInput.blur(); 
-                await setDoc(wordsDocRef, { [word]: increment(1) }, { merge: true });
+                try {
+                    await setDoc(wordsDocRef, { [word]: increment(1) }, { merge: true });
+                } catch (err) {
+                    console.error("文字寫入失敗", err);
+                }
             };
             submitWordBtn.addEventListener('click', submitWord);
             wordInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') submitWord(); });
@@ -349,26 +361,35 @@
                     if(newOptions.length === 0) return await showModal({ title: '錯誤', message: '選項不可為空！', type: 'alert' });
 
                     saveConfigBtn.innerText = "儲存中...";
-                    await setDoc(configDocRef, {
-                        pollTitle: editPollTitle.value,
-                        pollOptions: newOptions,
-                        wordCloudTitle: editWordCloudTitle.value
-                    });
-                    await setDoc(votesDocRef, {});
-                    await setDoc(wordsDocRef, {});
-                    
-                    adminPanel.classList.add('hidden');
-                    saveConfigBtn.innerText = "💾 儲存設定並重置舊資料";
-                    await showModal({ title: '成功', message: '✅ 題目設定已更新，活動重新開始！', type: 'alert' });
+                    try {
+                        await setDoc(configDocRef, {
+                            pollTitle: editPollTitle.value,
+                            pollOptions: newOptions,
+                            wordCloudTitle: editWordCloudTitle.value
+                        });
+                        await setDoc(votesDocRef, {});
+                        await setDoc(wordsDocRef, {});
+                        
+                        adminPanel.classList.add('hidden');
+                        saveConfigBtn.innerText = "💾 儲存設定並重置舊資料";
+                        await showModal({ title: '成功', message: '✅ 題目設定已更新，活動重新開始！', type: 'alert' });
+                    } catch (err) {
+                        console.error("重置設定失敗", err);
+                        saveConfigBtn.innerText = "💾 儲存設定並重置舊資料";
+                    }
                 }
             });
 
             clearDataBtn.addEventListener('click', async () => {
                 const pwd = await showModal({ title: '身份驗證', message: '⚠️ 管理員專用：請輸入清除密碼 (預設：1234)', type: 'prompt' });
                 if (pwd === '1234') { 
-                    await setDoc(votesDocRef, {});
-                    await setDoc(wordsDocRef, {});
-                    await showModal({ title: '成功', message: '✅ 資料已全數清除，可開始新回合！', type: 'alert' });
+                    try {
+                        await setDoc(votesDocRef, {});
+                        await setDoc(wordsDocRef, {});
+                        await showModal({ title: '成功', message: '✅ 資料已全數清除，可開始新回合！', type: 'alert' });
+                    } catch (err) {
+                        console.error("清除資料失敗", err);
+                    }
                 } else if (pwd !== null) {
                     await showModal({ title: '錯誤', message: '❌ 密碼錯誤', type: 'alert' });
                 }
