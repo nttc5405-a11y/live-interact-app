@@ -105,7 +105,23 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, increment } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        // ============================================================================
+        // 🚨 準備上線到 GitHub 必看！請在這裡填入你的 Firebase Config 🚨
+        // ============================================================================
+        const MY_FIREBASE_CONFIG = {
+            // 請將 Firebase 控制台取得的 apiKey, authDomain 等參數貼在下方：
+            // apiKey: "AIzaSyBxt9NlzZHV0sNhCM0HSbOUd86wVRyjb4k",
+            // authDomain: "live-interact-app.firebaseapp.com",
+            // projectId: "live-interact-app",
+            // storageBucket: "live-interact-app.firebasestorage.app",
+            // messagingSenderId: "1071597025780",
+            // appId: "1:1071597025780:web:8e9b9261f24d78f1b3e1a1"
+        };
+        // ============================================================================
+
+        // 自動判斷環境：如果在畫布預覽用內建的，如果發布出去用你填寫的 MY_FIREBASE_CONFIG
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : MY_FIREBASE_CONFIG;
+        
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
@@ -166,7 +182,6 @@
                     customModal.classList.add('hidden');
                     modalConfirmBtn.onclick = null;
                     modalCancelBtn.onclick = null;
-                    // 避免 Enter 鍵殘留事件
                     modalInput.onkeypress = null;
                 };
 
@@ -185,13 +200,12 @@
             });
         }
 
-        // 預設顏色陣列 (用來動態塗色)
+        // 預設顏色陣列
         const chartColors = [
             'rgba(59, 130, 246, 0.7)', 'rgba(34, 197, 94, 0.7)', 'rgba(239, 68, 68, 0.7)', 
             'rgba(245, 158, 11, 0.7)', 'rgba(139, 92, 246, 0.7)', 'rgba(14, 165, 233, 0.7)'
         ];
 
-        // 初始化 Chart.js (空資料狀態)
         const ctx = document.getElementById('voteChart').getContext('2d');
         const voteChart = new Chart(ctx, {
             type: 'bar',
@@ -199,16 +213,27 @@
             options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } }
         });
 
-        // 3. 處理身分驗證
+        // 3. 處理身分驗證 (含錯誤回報機制)
         const initAuth = async () => {
+            // 檢查是否沒有填寫 Config
+            if (Object.keys(firebaseConfig).length === 0) {
+                statusText.innerText = "❌ 尚未設定 Firebase Config，請在程式碼中填寫金鑰！";
+                statusText.className = "text-sm text-red-600 font-bold";
+                return;
+            }
+
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
+                    // 如果在 GitHub 上運行，會執行匿名登入
                     await signInAnonymously(auth);
                 }
             } catch (error) {
                 console.error("驗證失敗:", error);
+                // 顯示具體錯誤，例如 auth/operation-not-allowed 代表沒開匿名登入
+                statusText.innerText = `❌ 連線失敗 (${error.code})：請確認 Firebase 是否已開啟「匿名登入」`;
+                statusText.className = "text-sm text-red-600 font-bold";
             }
         };
 
@@ -222,10 +247,8 @@
         });
 
         function setupRealtimeListeners() {
-            // 監聽【系統設定檔 config】
             onSnapshot(configDocRef, (docSnap) => {
                 if (!docSnap.exists()) {
-                    // 若初次執行沒資料，先寫入一組預設值
                     setDoc(configDocRef, {
                         pollTitle: "📊 即時投票：最想參與的訓練課程？",
                         pollOptions: ["救護技術", "繩索救援", "火場指揮"],
@@ -235,17 +258,13 @@
                 }
 
                 const config = docSnap.data();
-                
-                // 更新標題
                 pollTitleEl.innerText = config.pollTitle || "📊 投票區";
                 wordCloudTitleEl.innerText = config.wordCloudTitle || "☁️ 文字雲";
 
-                // 動態生成投票按鈕
                 voteButtonsContainer.innerHTML = '';
                 const options = config.pollOptions || [];
                 options.forEach((opt, index) => {
                     const btn = document.createElement('button');
-                    // 根據顏色陣列輪流上色
                     const colorClasses = ['bg-blue-500', 'bg-green-500', 'bg-red-500', 'bg-yellow-500', 'bg-purple-500', 'bg-sky-500'];
                     const hoverClasses = ['hover:bg-blue-600', 'hover:bg-green-600', 'hover:bg-red-600', 'hover:bg-yellow-600', 'hover:bg-purple-600', 'hover:bg-sky-600'];
                     const cIdx = index % colorClasses.length;
@@ -260,19 +279,20 @@
                     voteButtonsContainer.appendChild(btn);
                 });
 
-                // 更新圖表標籤與顏色
                 voteChart.data.labels = options;
                 voteChart.data.datasets[0].backgroundColor = options.map((_, i) => chartColors[i % chartColors.length]);
                 voteChart.data.datasets[0].borderColor = options.map((_, i) => chartColors[i % chartColors.length].replace('0.7)', '1)'));
                 voteChart.update();
 
-                // 更新管理員面板的預設輸入值
                 editPollTitle.value = config.pollTitle;
                 editPollOptions.value = options.join(',');
                 editWordCloudTitle.value = config.wordCloudTitle;
+            }, (error) => {
+                console.error("讀取設定檔失敗:", error);
+                statusText.innerText = `❌ 資料讀取失敗 (${error.code})：請確認 Firestore 資料庫是否已開啟並設定為「測試模式」`;
+                statusText.className = "text-sm text-red-600 font-bold";
             });
 
-            // 監聽投票資料
             onSnapshot(votesDocRef, (docSnap) => {
                 const data = docSnap.exists() ? docSnap.data() : {};
                 const labels = voteChart.data.labels;
@@ -281,7 +301,6 @@
                 voteChart.update();
             });
 
-            // 監聽文字雲資料
             onSnapshot(wordsDocRef, (docSnap) => {
                 const data = docSnap.exists() ? docSnap.data() : {};
                 const list = Object.entries(data).map(([word, count]) => [word, count]);
@@ -300,7 +319,6 @@
         }
 
         function setupEventListeners() {
-            // 送出文字雲文字
             const submitWord = async () => {
                 const word = wordInput.value.trim();
                 if (!word) return;
@@ -311,7 +329,6 @@
             submitWordBtn.addEventListener('click', submitWord);
             wordInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') submitWord(); });
 
-            // 打開管理員設定面板
             toggleAdminBtn.addEventListener('click', async () => {
                 if(adminPanel.classList.contains('hidden')) {
                     const pwd = await showModal({ title: '身份驗證', message: '⚠️ 請輸入管理員密碼 (預設：1234)', type: 'prompt' });
@@ -322,11 +339,10 @@
                         await showModal({ title: '錯誤', message: '❌ 密碼錯誤！', type: 'alert' });
                     }
                 } else {
-                    adminPanel.classList.add('hidden'); // 再次點擊隱藏
+                    adminPanel.classList.add('hidden');
                 }
             });
 
-            // 儲存新設定 (並重置資料)
             saveConfigBtn.addEventListener('click', async () => {
                 const confirmed = await showModal({ title: '警告', message: '儲存新設定將會【清空目前的投票與文字雲資料】，確定要繼續嗎？', type: 'confirm' });
                 if(confirmed) {
@@ -334,13 +350,11 @@
                     if(newOptions.length === 0) return await showModal({ title: '錯誤', message: '選項不可為空！', type: 'alert' });
 
                     saveConfigBtn.innerText = "儲存中...";
-                    // 1. 更新系統設定
                     await setDoc(configDocRef, {
                         pollTitle: editPollTitle.value,
                         pollOptions: newOptions,
                         wordCloudTitle: editWordCloudTitle.value
                     });
-                    // 2. 清空舊資料
                     await setDoc(votesDocRef, {});
                     await setDoc(wordsDocRef, {});
                     
@@ -350,7 +364,6 @@
                 }
             });
 
-            // 僅清除資料 (舊有按鈕)
             clearDataBtn.addEventListener('click', async () => {
                 const pwd = await showModal({ title: '身份驗證', message: '⚠️ 管理員專用：請輸入清除密碼 (預設：1234)', type: 'prompt' });
                 if (pwd === '1234') { 
